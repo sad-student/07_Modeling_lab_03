@@ -1,4 +1,5 @@
 import queue
+from abc import ABC
 
 import numpy
 import matplotlib.pyplot as plt
@@ -67,120 +68,215 @@ class QueueSystem:
         pass
 
     class NodeBase:
-        source = None
-        consumers = None
+        _sources = None
+        _consumers = None
 
-        tick_counter = None
-        busy_counter = None
-        consumed = None
+        _tick_counter = None
+        _busy_counter = None
+
+        # limit consume() call to prevent loops in graph
+        _consume_counter = None
+
+        # limit tick() call to prevent loops in graph
+        _tick_call_counter = None
 
         def __init__(self, src=None):
+            self._sources = []
             if isinstance(src, QueueSystem.NodeBase):
-                self.source = src
-            self.consumers = []
-            self.tick_counter = 0
-            self.busy_counter = 0
-            self.consumed = False
+                self._sources.append(src)
+                src.subscribe(self)
+            elif type(src) is list:
+                for item in src:
+                    self._sources.append(item)
+                    item.subscribe(self)
+            self._consumers = []
+            self._tick_counter = 0
+            self._busy_counter = 0
+            self._consume_counter = 0
+            self._tick_call_counter = 0
 
         def subscribe(self, dst=None):
             if isinstance(dst, QueueSystem.NodeBase):
-                self.consumers.append(dst)
-
-        def feed(self, token=None):
-            if token is not None:
-                for consumer in self.consumers:
-                    consumer.feed(token)
-            pass
+                self._consumers.append(dst)
 
         def consume(self):
-            self.consumed = True
-            pass
+            if self._consume_counter >= len(self._consumers):   # <= 0:
+                raise Exception("Too many consume call for node")
+            self._consume_counter += 1  # -=1
 
         def tick(self):
-            self.tick_counter += 1
-            self.consumed = False
-            pass
+            if self._tick_call_counter == 0:
+                self.run()
+                for parent in self._sources:
+                    parent.tick()
+                self._consume_counter = 0   # len(self._consumers)
+                self._tick_counter += 1
+            self._tick_call_counter += 1
+            if self._tick_call_counter == max(len(self._consumers), 1):
+                self._tick_call_counter = 0
+
+        def run(self):
+            raise NotImplementedError
+        
+        def get_busy_rate(self):
+            return self._busy_counter / self._tick_counter
+        
+        def get_tick_counter(self):
+            return self._tick_counter
 
     class Source(NodeBase):
-        static = None
-        blocking = None
-        gen_prob = None
-        gen_rate = None
-        gen_counter = None
-        blocked = None
+        _static = None
+        _blocking = None
+        _gen_prob = None
+        _gen_rate = None
+        _gen_counter = None
+        _blocked = None
 
-        generated_value = None
-        retired_counter = None
+        _generated_value = None
+        _generated_counter = None
+        _discarded_counter = None
 
         def __init__(self, static: bool = False, blocking: bool = False, **kwargs):
             super().__init__(None)
-            self.static = static
+            self._static = static
             if static:
-                self.gen_rate = kwargs.get('gen_rate')
-                if type(self.gen_rate) is not int:
+                self._gen_rate = kwargs.get('gen_rate')
+                if type(self._gen_rate) is not int:
                     raise ValueError
-                self.gen_counter = 0
+                self._gen_counter = 0
             else:
-                self.gen_prob = kwargs.get('gen_prob')
-            self.blocking = blocking
-            if not self.blocking:
-                self.retired_counter = 0
-            self.blocked = False
+                self._gen_prob = kwargs.get('gen_prob')
+            self._blocking = blocking
+            self._discarded_counter = 0
+            self._generated_counter = 0
+            self._blocked = False
 
-        def tick(self):
-            if not self.consumed:
-                if self.blocking:
-                    self.blocked = True
+        def run(self):
+            if self._generated_value is not None:
+                if self._blocking:
+                    self._blocked = True
                 else:
-                    self.retired_counter += 1
-            if not self.blocked:
-                self.busy_counter += 1
-                if self.static:
-                    self.gen_counter += 1
-                    if self.gen_counter >= self.gen_rate:
+                    self._discarded_counter += 1
+            if not self._blocked:
+                self._busy_counter += 1
+                if self._static:
+                    self._gen_counter += 1
+                    if self._gen_counter >= self._gen_rate:
                         # TODO: generate new Token
-                        self.generated_value = QueueSystem.Token()
-                        self.gen_counter = 0
+                        self._generated_value = QueueSystem.Token()
+                        self._generated_counter += 1
+                        self._gen_counter = 0
                 else:
-                    if Generator.get_instance().next() < self.gen_prob:
+                    if Generator.get_instance().next() < self._gen_prob:
                         # TODO: generate new Token
-                        self.generated_value = QueueSystem.Token()
-                        pass
-            super().tick()
-            pass
+                        self._generated_value = QueueSystem.Token()
+                        self._generated_counter += 1
 
         def consume(self):
             super().consume()
-            return self.generated_value
+            ret_value = self._generated_value
+            self._generated_value = None
+            return ret_value
+        
+        def get_discard_rate(self):
+            return self._discarded_counter / self._generated_counter
+
+        def get_generation_rate(self):
+            return self._generated_counter / self._busy_counter
 
     class Queue(NodeBase):
-        capacity = None
+        _capacity = None
 
         _queue = None
-        overall_counter = None
-        full_counter = None
+        _overall_counter = None
+        _full_counter = None
 
-        def __init__(self, src: 'QueueSystem.NodeBase' = None, capacity: int = 2):
+        def __init__(self, src, capacity: int = 2):
             super().__init__(src)
-            self.capacity = capacity
-            self.overall_counter = 0
-            self.full_counter = 0
+            self._capacity = capacity
+            self._overall_counter = 0
+            self._full_counter = 0
             self._queue = queue.Queue(capacity)
+            self.consume_limit = 0
 
-        def tick(self):
-            self.overall_counter += self._queue.qsize()
+        def run(self):
+            for parent in self._sources:
+                if not self._queue.full():
+                    temp = parent.consume()
+                    if temp is not None:
+                        self._queue.put(temp, False)
+                else:
+                    break
+
+            self._overall_counter += self._queue.qsize()
             if not self._queue.empty():
-                self.busy_counter += 1
+                self._busy_counter += 1
                 if self._queue.full():
-                    self.full_counter += 1
-            super().tick()
+                    self._full_counter += 1
 
         def consume(self):
+            super().consume()
             if not self._queue.empty():
                 return self._queue.get(False)
             return None
 
-    pass
+        def get_full_rate(self):
+            return self._full_counter / self._busy_counter
+
+        def get_overall_wait(self):
+            return self._overall_counter / self._busy_counter
+
+    class Server(NodeBase):
+        _blocking = None
+        _serve_prob = None
+        _blocked = None
+
+        _served_value = None
+        _served_counter = None
+        _discarded_b_counter = None
+        _discarded_s_counter = None
+
+        def __init__(self, src, serve_prob, blocking=False):
+            super().__init__(src)
+            self._blocking = blocking
+            self._serve_prob = serve_prob
+            self._blocked = False
+            self._discarded_b_counter = 0
+            self._discarded_s_counter = 0
+            self._served_counter = 0
+
+        def run(self):
+            if self._served_value is not None:
+                if self._blocking:
+                    self._blocked = True
+                else:
+                    self._discarded_b_counter += 1
+            if not self._blocked:
+                self._busy_counter += 1
+                for parent in self._sources:
+                    temp = parent.consume()
+                    if temp is not None:
+                        if Generator.get_instance().next() < self._serve_prob:
+                            self._served_value = temp
+                            self._served_counter += 1
+                            break
+                        else:
+                            self._discarded_s_counter += 1
+
+        def consume(self):
+            super().consume()
+            ret_value = self._served_value
+            self._served_value = None
+            return ret_value
+
+        def get_serve_rate(self):
+            return self._served_counter / self._busy_counter
+
+        def get_service_discard_rate(self):
+            return self._discarded_s_counter / self._busy_counter
+
+        def get_block_discard_rate(self):
+            return self._discarded_b_counter / self._busy_counter
 
 
 class Modeler:
@@ -189,7 +285,39 @@ class Modeler:
 
 
 def lab():
-    pass
+    Generator.initialize(102191, 203563, 131)
+
+    params = [2, 1, 0.55, 0.5]
+    _labels = [f"Generator rate: ", f"Queue capacity: ",
+               f"Server 1 discard probability: ", f"Server 2 discard probability: "]
+    _types = [int, int, float, float]
+    for i in range(len(params)):
+        try:
+            temp = _types[i](input(_labels[i]))
+            params[i] = temp if temp != 0 else params[i]
+        except ValueError:
+            continue
+
+    nodes = []
+    nodes.append(QueueSystem.Source(True, True, gen_rate=params[0]))
+    nodes.append(QueueSystem.Queue(nodes[0], params[1]))
+    nodes.append(QueueSystem.Server(nodes[1], 1 - params[2], False))
+    nodes.append(QueueSystem.Server(nodes[2], 1 - params[3]))
+
+    for _ in range(int(10e4)):
+        nodes[3].tick()
+
+    print(f"\n\tQueue system statistics: ")
+    print(f"S1 busy rate: {nodes[0].get_busy_rate()}; \tS1 generation rate: {nodes[0].get_generation_rate()}")
+    print(f"Q1 busy rate: {nodes[1].get_busy_rate()}; \tQ1 overall wait duration: {nodes[1].get_overall_wait()}; "
+          f"\tQ1 full queue rate: {nodes[1].get_full_rate()}")
+    print(f"C1 busy rate: {nodes[2].get_busy_rate()}; \tC1 serve rate: {nodes[2].get_serve_rate()}; "
+          f"\tC1 block discard rate: {nodes[2].get_block_discard_rate()}; "
+          f"\tC1 service discard rate: {nodes[2].get_service_discard_rate()}")
+    print(f"C2 busy rate: {nodes[3].get_busy_rate()}; \tC2 serve rate: {nodes[3].get_serve_rate()}; "
+          f"\tC2 block discard rate: {nodes[3].get_block_discard_rate()}; "
+          f"\tC2 service discard rate: {nodes[3].get_service_discard_rate()}")
+    print(f"Total queue system clock count: {nodes[3].get_tick_counter()}, {nodes[0].get_tick_counter()}")
 
 
 if __name__ == '__main__':
