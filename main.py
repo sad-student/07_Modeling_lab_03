@@ -2,7 +2,6 @@ import queue
 from abc import ABC
 
 import numpy
-import matplotlib.pyplot as plt
 from functools import reduce
 
 
@@ -184,6 +183,8 @@ class QueueSystem:
             super().consume()
             ret_value = self._generated_value
             self._generated_value = None
+            if self._blocking:
+                self._blocked = False
             return ret_value
 
         def get_discard_rate(self):
@@ -267,7 +268,9 @@ class QueueSystem:
         _blocked_counter = None
         _served_counter = None
         _discarded_b_counter = None
-        _discarded_s_counter = None
+        _failed_finish_counter = None
+
+        _process_finished = None
 
         def __init__(self, src, serve_prob, blocking=False):
             super().__init__(src)
@@ -276,45 +279,53 @@ class QueueSystem:
             self._blocked = False
             self._blocked_counter = 0
             self._discarded_b_counter = 0
-            self._discarded_s_counter = 0
+            self._failed_finish_counter = 0
             self._served_counter = 0
+            self._process_finished = False
 
         def run(self):
-            if self._served_value is not None:
-                if self._blocking:
-                    self._blocked = True
-                else:
-                    self._discarded_b_counter += 1
-                    self._served_value = None
+            if self._process_finished:
+                if self._served_value is not None:
+                    if self._blocking:
+                        self._blocked = True
+                    else:
+                        self._discarded_b_counter += 1
+                        self._served_value = None
+                        self._process_finished = False
             if not self._blocked:
-                # self._busy_counter += 1
-                busy = False
-                for parent in self._sources:
-                    temp = parent.consume()
-                    if temp is not None:
-                        busy = True
-                        if Generator.get_instance().next() <= self._serve_prob:
+                if self._served_value is None:
+                    for parent in self._sources:
+                        temp = parent.consume()
+                        if temp is not None:
                             self._served_value = temp
-                            self._served_counter += 1
+                            self._process_finished = False
                             break
-                        else:
-                            self._discarded_s_counter += 1
-                if busy:
+                if self._served_value is not None:
+                    if Generator.get_instance().next() <= self._serve_prob:
+                        self._served_counter += 1
+                        self._process_finished = True
+                    else:
+                        self._failed_finish_counter += 1
                     self._busy_counter += 1
             else:
                 self._blocked_counter += 1
 
         def consume(self):
             super().consume()
-            ret_value = self._served_value
-            self._served_value = None
+            ret_value = None
+            if self._process_finished:
+                ret_value = self._served_value
+                self._served_value = None
+                self._process_finished = False
+                if self._blocking:
+                    self._blocked = False
             return ret_value
 
         def get_serve_rate(self):
             return self._served_counter / self._busy_counter
 
         def get_service_discard_rate(self):
-            return self._discarded_s_counter / self._busy_counter
+            return self._failed_finish_counter / self._busy_counter
 
         def get_block_discard_rate(self):
             return self._discarded_b_counter / self._busy_counter
@@ -329,10 +340,10 @@ class QueueSystem:
             return self._served_counter
 
         def get_discarded_counter(self):
-            return self._discarded_b_counter + self._discarded_s_counter
+            return self._discarded_b_counter
 
         def get_service_discarded_counter(self):
-            return self._discarded_s_counter
+            return self._failed_finish_counter
 
         pass
 
@@ -347,8 +358,8 @@ def lab():
     Generator.initialize(102191, 203563, 131)
 
     params = [2, 1, 0.55, 0.5]
-    _labels = [f"Generator rate: ", f"Queue capacity: ",
-               f"Server 1 discard probability: ", f"Server 2 discard probability: "]
+    _labels = [f"Generator rate: [{params[0]}]", f"Queue capacity: [{params[1]}]",
+               f"Server 1 discard probability: [{params[2]}]", f"Server 2 discard probability: [{params[3]}]"]
     _types = [int, int, float, float]
     for i in range(len(params)):
         try:
