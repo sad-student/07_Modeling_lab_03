@@ -477,7 +477,7 @@ def lab():
             total_tokens_served += node.get_served_counter()
 
     if total_blocked_nodes > 0:
-        average_block_rate = nodes[len(nodes) - 1].get_tick_counter() / total_blocked_clocks / total_blocked_nodes
+        average_block_rate = total_blocked_clocks / nodes[len(nodes) - 1].get_tick_counter() / total_blocked_nodes
     else:
         average_block_rate = 0.0
     if len(nodes) > 0:
