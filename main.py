@@ -166,6 +166,7 @@ class QueueSystem:
                     self._blocked = True
                 else:
                     self._discarded_counter += 1
+                    self._generated_value = None
             if not self._blocked:
                 self._busy_counter += 1
                 if self._static:
@@ -357,10 +358,24 @@ class Modeler:
 def lab():
     Generator.initialize(102191, 203563, 131)
 
-    params = [2, 1, 0.55, 0.5]
-    _labels = [f"Generator rate: [{params[0]}]", f"Queue capacity: [{params[1]}]",
-               f"Server 1 discard probability: [{params[2]}]", f"Server 2 discard probability: [{params[3]}]"]
-    _types = [int, int, float, float]
+    params = [
+        2,
+        1,
+        0.55,
+        0.5
+    ]
+    _labels = [
+        f"Generator rate: [{params[0]}]",
+        f"Queue capacity: [{params[1]}]",
+        f"Server 1 discard probability: [{params[2]}]",
+        f"Server 2 discard probability: [{params[3]}]"
+    ]
+    _types = [
+        int,
+        int,
+        float,
+        float
+    ]
     for i in range(len(params)):
         try:
             temp = _types[i](input(_labels[i]))
@@ -390,20 +405,23 @@ def lab():
             node_codes[0] += 1
             print(f"S{node_codes[0]} statistics: ")
             print(f"\tBusy rate: {node.get_busy_rate()}; "
-                  f"\tgeneration rate: {node.get_generation_rate()}")
+                  f"\tgeneration rate: {node.get_generation_rate()}; "
+                  f"\tdiscard rate: {node.get_discard_rate()}; "
+                  f'\tblocked rate: {node.get_blocked_rate()}')
         elif type(node) is QueueSystem.Queue:
             node_codes[1] += 1
             print(f"Q{node_codes[1]} statistics: ")
             print(
-                f"\tBusy rate: {node.get_busy_rate()}; \taverage wait duration: {node.get_average_wait()}; "
+                f"\tBusy rate: {node.get_busy_rate()}; " 
+                f"\taverage wait duration: {node.get_average_wait()}; "
                 f"\taverage load rate: {node.get_average_load()}; "
                 f"\n\tfull queue rate: {node.get_full_rate()}")
         elif type(node) is QueueSystem.Server:
             node_codes[2] += 1
             print(f"C{node_codes[2]} statistics: ")
-            print(f"\tBusy rate: {node.get_busy_rate()}; \tserve rate: {node.get_serve_rate()}; "
+            print(f"\tBusy rate: {node.get_busy_rate()}; " 
+                  f"\tserve rate: {node.get_serve_rate()}; "
                   f"\tblock discard rate: {node.get_block_discard_rate()}; "
-                  f"\n\tservice discard rate: {node.get_service_discard_rate()}; "
                   f"\tnode blocked rate: {node.get_blocked_rate()}")
 
     print(f"Total queue system clock count: {nodes[3].get_tick_counter()}, {nodes[0].get_tick_counter()}")
@@ -459,7 +477,7 @@ def lab():
             total_tokens_served += node.get_served_counter()
 
     if total_blocked_nodes > 0:
-        average_block_rate /= total_blocked_nodes
+        average_block_rate = nodes[len(nodes) - 1].get_tick_counter() / total_blocked_clocks / total_blocked_nodes
     else:
         average_block_rate = 0.0
     if len(nodes) > 0:
