@@ -1,5 +1,4 @@
 import queue
-from abc import ABC
 
 import numpy
 from functools import reduce
@@ -221,7 +220,6 @@ class QueueSystem:
             self._overall_counter = 0
             self._full_counter = 0
             self._queue = queue.Queue(capacity)
-            self.consume_limit = 0
 
         def run(self):
             for parent in self._sources:
@@ -266,12 +264,12 @@ class QueueSystem:
         _blocked = None
 
         _served_value = None
+        _service_finished = None
+
         _blocked_counter = None
         _served_counter = None
-        _discarded_b_counter = None
-        _failed_finish_counter = None
-
-        _process_finished = None
+        _discarded_counter = None
+        _delayed_counter = None
 
         def __init__(self, src, serve_prob, blocking=False):
             super().__init__(src)
@@ -279,34 +277,34 @@ class QueueSystem:
             self._serve_prob = serve_prob
             self._blocked = False
             self._blocked_counter = 0
-            self._discarded_b_counter = 0
-            self._failed_finish_counter = 0
+            self._discarded_counter = 0
+            self._delayed_counter = 0
             self._served_counter = 0
-            self._process_finished = False
+            self._service_finished = False
 
         def run(self):
-            if self._process_finished:
+            if self._service_finished:
                 if self._served_value is not None:
                     if self._blocking:
                         self._blocked = True
                     else:
-                        self._discarded_b_counter += 1
+                        self._discarded_counter += 1
                         self._served_value = None
-                        self._process_finished = False
+                        self._service_finished = False
             if not self._blocked:
                 if self._served_value is None:
                     for parent in self._sources:
                         temp = parent.consume()
                         if temp is not None:
                             self._served_value = temp
-                            self._process_finished = False
+                            self._service_finished = False
                             break
                 if self._served_value is not None:
                     if Generator.get_instance().next() <= self._serve_prob:
                         self._served_counter += 1
-                        self._process_finished = True
+                        self._service_finished = True
                     else:
-                        self._failed_finish_counter += 1
+                        self._delayed_counter += 1
                     self._busy_counter += 1
             else:
                 self._blocked_counter += 1
@@ -314,10 +312,10 @@ class QueueSystem:
         def consume(self):
             super().consume()
             ret_value = None
-            if self._process_finished:
+            if self._service_finished:
                 ret_value = self._served_value
                 self._served_value = None
-                self._process_finished = False
+                self._service_finished = False
                 if self._blocking:
                     self._blocked = False
             return ret_value
@@ -325,11 +323,8 @@ class QueueSystem:
         def get_serve_rate(self):
             return self._served_counter / self._busy_counter
 
-        def get_service_discard_rate(self):
-            return self._failed_finish_counter / self._busy_counter
-
-        def get_block_discard_rate(self):
-            return self._discarded_b_counter / self._busy_counter
+        def get_discard_rate(self):
+            return self._discarded_counter / self._busy_counter
 
         def get_blocked_rate(self):
             return self._blocked_counter / self._tick_counter
@@ -341,17 +336,10 @@ class QueueSystem:
             return self._served_counter
 
         def get_discarded_counter(self):
-            return self._discarded_b_counter
-
-        def get_service_discarded_counter(self):
-            return self._failed_finish_counter
+            return self._discarded_counter
 
         pass
 
-    pass
-
-
-class Modeler:
     pass
 
 
@@ -365,10 +353,10 @@ def lab():
         0.5
     ]
     _labels = [
-        f"Generator rate: [{params[0]}]",
-        f"Queue capacity: [{params[1]}]",
-        f"Server 1 discard probability: [{params[2]}]",
-        f"Server 2 discard probability: [{params[3]}]"
+        f"Generator rate: [{params[0]}] ",
+        f"Queue capacity: [{params[1]}] ",
+        f"Server 1 discard probability: [{params[2]}] ",
+        f"Server 2 discard probability: [{params[3]}] "
     ]
     _types = [
         int,
@@ -407,7 +395,7 @@ def lab():
             print(f"\tBusy rate: {node.get_busy_rate()}; "
                   f"\tgeneration rate: {node.get_generation_rate()}; "
                   f"\tdiscard rate: {node.get_discard_rate()}; "
-                  f'\tblocked rate: {node.get_blocked_rate()}')
+                  f"\tblocked rate: {node.get_blocked_rate()}")
         elif type(node) is QueueSystem.Queue:
             node_codes[1] += 1
             print(f"Q{node_codes[1]} statistics: ")
@@ -421,10 +409,10 @@ def lab():
             print(f"C{node_codes[2]} statistics: ")
             print(f"\tBusy rate: {node.get_busy_rate()}; " 
                   f"\tserve rate: {node.get_serve_rate()}; "
-                  f"\tblock discard rate: {node.get_block_discard_rate()}; "
+                  f"\tdiscard rate: {node.get_discard_rate()}; "
                   f"\tnode blocked rate: {node.get_blocked_rate()}")
 
-    print(f"Total queue system clock count: {nodes[3].get_tick_counter()}, {nodes[0].get_tick_counter()}")
+    print(f"Total queue system clock count: {nodes[3].get_tick_counter()} / {nodes[0].get_tick_counter()} \n")
 
     total_discarded = 0
     total_blocked_clocks = 0
@@ -433,20 +421,20 @@ def lab():
     average_block_rate = 0.0
     average_queue_len = 0.0
     average_queue_wait = 0.0
-    average_tokens_count = 0.0
     average_serve_duration = 0.0
     average_busy_rate = 0.0
     total_blocked_nodes = 0
     total_queue_nodes = 0
+    total_token_load = 0.0
 
     for node in nodes:
         blocked = False
         if type(node) is QueueSystem.Source:
             total_discarded += node.get_discarded_counter()
             total_tokens_generated += node.get_generated_counter()
-            average_tokens_count += node.get_generated_counter()
-            average_serve_duration += (node.get_generated_counter() + node.get_blocked_counter()) \
-                                      / node.get_generated_counter()
+            total_token_load += node.get_blocked_rate()
+            average_serve_duration += \
+                (node.get_generated_counter() + node.get_blocked_counter()) / node.get_generated_counter()
 
             _blocked_counter = node.get_blocked_counter()
             total_blocked_clocks += _blocked_counter
@@ -454,11 +442,9 @@ def lab():
                 blocked = True
         elif type(node) is QueueSystem.Server:
             total_discarded += node.get_discarded_counter()
-            average_tokens_count += node.get_served_counter()
-            # TODO: node discard weight value
-            average_serve_duration += (node.get_served_counter() + node.get_blocked_counter()
-                                       + 0 * node.get_service_discarded_counter()) \
-                                      / node.get_served_counter()
+            total_token_load += node.get_busy_rate()
+            average_serve_duration += \
+                (node.get_served_counter() + node.get_blocked_counter()) / node.get_served_counter()
 
             _blocked_counter = node.get_blocked_counter()
             total_blocked_clocks += _blocked_counter
@@ -468,7 +454,7 @@ def lab():
             average_queue_len += node.get_average_load()
             average_queue_wait += node.get_average_wait()
             average_serve_duration += node.get_average_wait()
-            average_tokens_count += node.get_served_counter()
+            total_token_load += node.get_average_load() * node.get_busy_rate()
         average_busy_rate += node.get_busy_rate()
         if blocked:
             total_blocked_nodes += 1
@@ -486,7 +472,6 @@ def lab():
         average_queue_len /= total_queue_nodes
         average_queue_wait /= total_queue_nodes
     if nodes[len(nodes) - 1].get_tick_counter() > 0:
-        average_tokens_count /= nodes[len(nodes) - 1].get_tick_counter()
         average_tokens_served = total_tokens_served / nodes[len(nodes) - 1].get_tick_counter()
     else:
         average_tokens_served = 0
@@ -497,21 +482,12 @@ def lab():
         total_serve_rate = 0
         total_discard_rate = 0
 
-    # average_block_rate /= total_blocked_nodes
-    # average_busy_rate /= len(nodes)
-    # average_queue_len /= total_queue_nodes
-    # average_queue_wait /= total_queue_nodes
-    # average_tokens_count /= nodes[len(nodes) - 1].get_tick_counter()
-    # average_tokens_served = total_tokens_served / nodes[len(nodes) - 1].get_tick_counter()
-    # total_serve_rate = total_tokens_served / total_tokens_generated
-    # total_discard_rate = total_discarded / total_tokens_generated
-
+    print(f"Total token serve probability: {total_serve_rate}")
+    print(f"Average tokens served per clock: {average_tokens_served}")
     print(f"System deny probability: {total_discard_rate}")
     print(f"System block probability: {average_block_rate}")
     print(f"Average queue length: {average_queue_len}")
-    print(f"Average simultaneously processed tokens: {average_tokens_count}")
-    print(f"Total token serve probability: {total_serve_rate}")
-    print(f"Average tokens served per clock: {average_tokens_served}")
+    print(f"Average simultaneously processed tokens: {total_token_load}")
     print(f"Average queue token wait duration: {average_queue_wait}")
     print(f"Average token service duration: {average_serve_duration}")
     print(f"System load rate: {average_busy_rate}")
